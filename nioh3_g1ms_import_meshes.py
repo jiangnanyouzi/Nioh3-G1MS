@@ -12,12 +12,10 @@
 # 3. Run this script (in the folder with the g1m file).
 #
 # For command line options:
-# /path/to/python3 nioh3_g1ms_import_meshes.py --help
+# /path/to/python3 nioh3_g1m_import_meshes.py --help
 #
 # IMPORTANT: If you change topology (add/remove faces), meshlet sections will be stale.
 # Use --strip-meshlets to drop them and force the engine to use legacy rendering (experimental).
-
-# GitHub jiangnanyouzi/Nioh3-G1MS
 
 try:
     import glob, os, io, sys, re, copy, struct, shutil, json
@@ -325,14 +323,18 @@ def build_composite_buffers(g1m_name, model_mesh_metadata, g1mg_stream, skel_dat
                         else:
                             indexBufferPrimType = 1
                         # Update submesh info with new offsets and counts
+                        # IMPORTANT: vertexBufferIndex and indexBufferIndex must point to the
+                        # rebuilt composite buffer entries, NOT the original indices, because
+                        # meshlet stripping and submesh merging change the entry count/order.
+                        new_buffer_index = len(composite_vbs)
                         vbsub_info[existing_submeshes[j]] = {"submeshFlags": subvbs['data'][existing_submeshes[j]]['submeshFlags'],\
-                            "vertexBufferIndex": i,\
+                            "vertexBufferIndex": new_buffer_index,\
                             "bonePaletteIndex": subvbs['data'][existing_submeshes[j]]['bonePaletteIndex'],\
                             "boneIndex": subvbs['data'][existing_submeshes[j]]['boneIndex'],\
                             "unknown": subvbs['data'][existing_submeshes[j]]['unknown'],\
                             "shaderParamIndex": subvbs['data'][existing_submeshes[j]]['shaderParamIndex'],\
                             "materialIndex": subvbs['data'][existing_submeshes[j]]['materialIndex'],\
-                            "indexBufferIndex": i,\
+                            "indexBufferIndex": new_buffer_index,\
                             "unknown2": subvbs['data'][existing_submeshes[j]]['unknown2'],\
                             "indexBufferPrimType": indexBufferPrimType,\
                             "vertexBufferOffset": len(composite_vb[0]['Buffer']) - len(vb[0]['Buffer']),\
@@ -355,14 +357,15 @@ def build_composite_buffers(g1m_name, model_mesh_metadata, g1mg_stream, skel_dat
                 composite_ib = [x for y in generate_ib(i, g1mg_stream, model_mesh_metadata, original_fmts, e=e) for x in y]
                 composite_vb = generate_vb(i, g1mg_stream, model_mesh_metadata, original_fmts, e=e)
                 # Place an empty submesh in the mesh
+                new_buffer_index = len(composite_vbs)
                 vbsub_info = {mesh_with_subs[i][0]: {"submeshFlags": subvbs['data'][mesh_with_subs[i][0]]['submeshFlags'],\
-                            "vertexBufferIndex": i,\
+                            "vertexBufferIndex": new_buffer_index,\
                             "bonePaletteIndex": subvbs['data'][mesh_with_subs[i][0]]['bonePaletteIndex'],\
                             "boneIndex": subvbs['data'][mesh_with_subs[i][0]]['boneIndex'],\
                             "unknown": subvbs['data'][mesh_with_subs[i][0]]['unknown'],\
                             "shaderParamIndex": subvbs['data'][mesh_with_subs[i][0]]['shaderParamIndex'],\
                             "materialIndex": subvbs['data'][mesh_with_subs[i][0]]['materialIndex'],\
-                            "indexBufferIndex": i,\
+                            "indexBufferIndex": new_buffer_index,\
                             "unknown2": subvbs['data'][mesh_with_subs[i][0]]['unknown2'],\
                             "indexBufferPrimType": subvbs['data'][mesh_with_subs[i][0]]['indexBufferPrimType'],\
                             "vertexBufferOffset": 0,\
@@ -613,16 +616,9 @@ def build_g1mg(g1m_name, skel_data, e = '<', strip_meshlets = False):
                         len(model_mesh_metadata['sections'][i]['data'])) + lod_section
                 else:
                     # Copy unknown section verbatim from original stream.
-                    # IMPORTANT: offset is relative to remaining_data (after the 48-byte G1MG header),
-                    # but f is the full g1mg_stream which includes the 12-byte G1M chunk header.
-                    # So the actual offset in g1mg_stream is 48 + offset (chunk header is already
-                    # consumed by parseG1MG and not part of remaining_data, but G1MG header IS
-                    # consumed and offset starts from after it).
-                    # Wait: g1mg_stream contains chunk header (12) + G1MG header (48) + data.
-                    # parseG1MG reads 48 bytes from g1mg_stream, then reads remaining_data from offset 48.
-                    # section['offset'] is relative to remaining_data, i.e. offset 48 in g1mg_stream.
-                    # So actual offset in g1mg_stream = 48 + section['offset'].
-                    f.seek(48 + model_mesh_metadata['sections'][i]['offset'], 0)
+                    # section['offset'] is the absolute offset within g1mg_stream
+                    # (as recorded by parseG1MG), so seek directly to it.
+                    f.seek(model_mesh_metadata['sections'][i]['offset'], 0)
                     new_g1mg += f.read(model_mesh_metadata['sections'][i]['size'])
         except KeyError as e:
             print("KeyError: Missing value \"{0}\" detected in metadata section {1} subsection {2}!".format(e.args[0], \
