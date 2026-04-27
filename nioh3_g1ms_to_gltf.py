@@ -14,6 +14,8 @@ Usage:
     python nioh3_g1ms_to_gltf.py <input_dir_or_g1m> [output_dir]
 """
 
+# GitHub jiangnanyouzi/Nioh3-G1MS
+
 import glob
 import os
 import io

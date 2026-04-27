@@ -17,6 +17,8 @@ Usage:
 Options:
     -o, --overwrite          Overwrite existing output folder
     -f, --full_vertices      Output full meshes (do NOT cull unreferenced vertices)
+
+GitHub jiangnanyouzi/Nioh3-G1MS
 """
 
 import glob
