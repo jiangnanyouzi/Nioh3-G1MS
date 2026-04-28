@@ -13,6 +13,8 @@ Does NOT modify existing source files. Reuses parsing logic from g1m_export_mesh
 Usage:
     python nioh3_g1m_to_gltf.py <input_dir_or_g1m> [output_dir]
 """
+#
+# GitHub jiangnanyouzi/Nioh3-G1MS
 
 import glob
 import os

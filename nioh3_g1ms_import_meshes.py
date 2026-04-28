@@ -16,6 +16,8 @@
 #
 # IMPORTANT: If you change topology (add/remove faces), meshlet sections will be stale.
 # Use --strip-meshlets to drop them and force the engine to use legacy rendering (experimental).
+#
+# GitHub jiangnanyouzi/Nioh3-G1MS
 
 try:
     import glob, os, io, sys, re, copy, struct, shutil, json
