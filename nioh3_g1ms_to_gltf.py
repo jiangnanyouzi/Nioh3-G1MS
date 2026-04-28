@@ -11,10 +11,8 @@ Handles Nioh 3 specific quirks:
 Does NOT modify existing source files. Reuses parsing logic from g1m_export_meshes.py.
 
 Usage:
-    python nioh3_g1ms_to_gltf.py <input_dir_or_g1m> [output_dir]
+    python nioh3_g1m_to_gltf.py <input_dir_or_g1m> [output_dir]
 """
-
-# GitHub jiangnanyouzi/Nioh3-G1MS
 
 import glob
 import os
@@ -288,13 +286,17 @@ def _try_meshlet_path(subindex, g1mg_stream, model_mesh_metadata, fmts, e, bbox)
         e_data = sec_e['data']
         if len(e_data) >= 8:
             e_count, e_stride = struct.unpack(e + 'II', e_data[:8])
-            if e_count == c_count and e_stride >= 24:
+            # Some models have fewer BVH nodes than meshlet entries (e.g. 295 vs 296).
+            # Entries within e_count are checked against BVH; entries beyond have no node and are treated as leaf.
+            if e_count <= c_count and e_stride >= 24:
                 leaf_meshlets = set()
                 for i in range(e_count):
                     off = 8 + i * e_stride
                     child0, child1 = struct.unpack(e + 'ii', e_data[off + 16:off + 24])
                     if child0 == -1 and child1 == -1:
                         leaf_meshlets.add(i)
+                for i in range(e_count, c_count):
+                    leaf_meshlets.add(i)
 
     # Parse 0x10010 for meshlet-to-submesh mapping
     sec_10 = _parse_g1mg_section(g1mg_stream, 0x00010010, e)
@@ -303,13 +305,13 @@ def _try_meshlet_path(subindex, g1mg_stream, model_mesh_metadata, fmts, e, bbox)
         data_10 = sec_10['data']
         if len(data_10) >= 8:
             count_10, stride_10 = struct.unpack(e + 'II', data_10[:8])
-            if count_10 == c_count and stride_10 >= 12:
+            if count_10 <= c_count and stride_10 >= 12:
                 meshlet_to_submesh = {}
                 for i in range(count_10):
                     off = 8 + i * stride_10
                     a, b, c_val = struct.unpack(e + 'III', data_10[off:off + 12])
                     submesh_id = (c_val >> 16) & 0xFFFF
-                    meshlet_to_submesh[i] = submesh_id
+                    meshlet_to_submesh[a] = submesh_id
 
     # Get IB data for this specific submesh
     subvbs = [x for x in model_mesh_metadata['sections'] if x['type'] == 'SUBMESH'][0]
@@ -597,90 +599,22 @@ def export_textures_for_model(model_dir, out_dir):
     return png_files
 
 
-def generate_materials(gltf_data, model_mesh_metadata, texture_files, out_dir):
-    """Build materials referencing exported textures. Handles 1x1 param textures as factors."""
+def generate_materials(gltf_data, model_mesh_metadata):
+    """Generate placeholder materials without texture references.
+    User will add images manually in the glTF viewer/editor."""
     metadata_sections = {model_mesh_metadata['sections'][i]['type']: i for i in range(len(model_mesh_metadata['sections']))}
     if 'MATERIALS' not in metadata_sections:
         return gltf_data
     materials = model_mesh_metadata['sections'][metadata_sections['MATERIALS']]['data']
-    # Map texture IDs to files and collect info
-    images = []
-    image_map = {}
-    texture_info = {}
-    for mat in materials:
-        for tex in mat['textures']:
-            tid = tex['id']
-            if tid not in image_map:
-                if tid < len(texture_files):
-                    image_map[tid] = len(images)
-                    images.append({'uri': texture_files[tid]})
-                    img_path = os.path.join(out_dir, texture_files[tid])
-                    texture_info[tid] = _get_image_info(img_path)
-                else:
-                    image_map[tid] = None
-    gltf_data['images'] = images
     for i in range(len(materials)):
-        material = {'name': 'Material_{0:02d}'.format(i), 'doubleSided': True}
-        type2_texture_index = None
-        for j in range(len(materials[i]['textures'])):
-            tex = materials[i]['textures'][j]
-            tid = image_map.get(tex['id'])
-            if tid is None:
-                continue
-            info = texture_info.get(tex['id'])
-            is_1x1 = info is not None and info[0] == 1 and info[1] == 1
-            ttype = tex['type']
-            # 1x1 baseColor -> baseColorFactor
-            if ttype == 1 and is_1x1:
-                px = info[2]
-                if px is not None:
-                    if isinstance(px, (int, float)):
-                        factor = [px / 255.0, px / 255.0, px / 255.0, 1.0]
-                    else:
-                        factor = [c / 255.0 for c in px[:4]]
-                    material.setdefault('pbrMetallicRoughness', {})
-                    material['pbrMetallicRoughness']['baseColorFactor'] = factor
-                continue
-            # 1x1 normal/occlusion -> skip
-            if ttype in (3, 5) and is_1x1:
-                continue
-            # 1x1 emissive -> emissiveFactor
-            if ttype == 2 and is_1x1:
-                px = info[2]
-                if px is not None:
-                    if isinstance(px, (int, float)):
-                        factor = [px / 255.0, px / 255.0, px / 255.0]
-                    else:
-                        factor = [c / 255.0 for c in px[:3]]
-                    material['emissiveFactor'] = factor
-                continue
-            # Regular texture reference
-            sampler = {'wrapS': 10497, 'wrapT': 10497}
-            texture = {'source': tid, 'sampler': len(gltf_data['samplers'])}
-            gltf_data['samplers'].append(sampler)
-            gltf_data['textures'].append(texture)
-            tex_index = len(gltf_data['textures']) - 1
-            if ttype == 1:
-                material.setdefault('pbrMetallicRoughness', {})
-                material['pbrMetallicRoughness']['baseColorTexture'] = {
-                    'index': tex_index, 'texCoord': tex['layer']
-                }
-                material['pbrMetallicRoughness'].setdefault('metallicFactor', 0.0)
-                material['pbrMetallicRoughness'].setdefault('roughnessFactor', 1.0)
-            elif ttype == 2:
-                material['emissiveTexture'] = {'index': tex_index, 'texCoord': tex['layer']}
-                type2_texture_index = tex_index
-            elif ttype == 3:
-                material['normalTexture'] = {'index': tex_index, 'texCoord': tex['layer']}
-            elif ttype == 5:
-                material['occlusionTexture'] = {'index': tex_index, 'texCoord': tex['layer']}
-        # Fallback: if no baseColorTexture but type2 is available, use it
-        pbr = material.get('pbrMetallicRoughness', {})
-        if pbr and 'baseColorTexture' not in pbr and type2_texture_index is not None:
-            pbr['baseColorTexture'] = {'index': type2_texture_index, 'texCoord': 0}
-            pbr.setdefault('metallicFactor', 0.0)
-            pbr.setdefault('roughnessFactor', 1.0)
-            material['pbrMetallicRoughness'] = pbr
+        material = {
+            'name': 'Material_{0:02d}'.format(i),
+            'doubleSided': True,
+            'pbrMetallicRoughness': {
+                'metallicFactor': 0.0,
+                'roughnessFactor': 1.0
+            }
+        }
         # Foliage meshes typically rely on alpha test
         material['alphaMode'] = 'MASK'
         material['alphaCutoff'] = 0.5
@@ -714,11 +648,9 @@ def write_glTF(g1m_path, out_dir, g1mg_stream, model_mesh_metadata, model_skel_d
     }
     gltf_data['scenes'][0]['nodes'] = [0]
 
-    # Export textures
-    model_dir = os.path.dirname(g1m_path)
-    texture_files = export_textures_for_model(model_dir, out_dir)
+    # Generate placeholder materials (no textures; user will add images manually)
     if 'MATERIALS' in metadata_sections:
-        gltf_data = generate_materials(gltf_data, model_mesh_metadata, texture_files, out_dir)
+        gltf_data = generate_materials(gltf_data, model_mesh_metadata)
 
     # Build skeleton nodes
     for i in range(len(model_skel_data['boneList'])):
@@ -728,8 +660,9 @@ def write_glTF(g1m_path, out_dir, g1mg_stream, model_mesh_metadata, model_skel_d
                 node['rotation'] = model_skel_data['boneList'][i]['rotation_q']
             if not list(model_skel_data['boneList'][i]['scale']) == [1, 1, 1]:
                 node['scale'] = model_skel_data['boneList'][i]['scale']
-            if not list(model_skel_data['boneList'][i]['pos_xyz']) == [0, 0, 0]:
-                node['translation'] = model_skel_data['boneList'][i]['pos_xyz']
+            tx, ty, tz = model_skel_data['boneList'][i]['pos_xyz']
+            if tx != 0 or ty != 0 or tz != 0:
+                node['translation'] = [tx, ty, tz]
             if i > 0:
                 gltf_data['nodes'][model_skel_data['boneList'][i]['parentID']]['children'].append(len(gltf_data['nodes']))
             gltf_data['nodes'].append(node)
